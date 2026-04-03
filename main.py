@@ -1,95 +1,173 @@
 import threading
 import requests
-import pytempbox
+from pytempbox import PyTempBox
 import time
 import re
+import random
+from faker import Faker
+from datetime import datetime, timedelta
 
-INSTAGRAM_API_URL = "https://www.instagram.com/api/v1"
-SESSION = requests.Session()
+# Instagram sign-up URLs
+DESKTOP_SIGNUP_URL = "https://www.instagram.com/accounts/emailsignup/"
+MOBILE_SIGNUP_URL = "https://instagram.com/accounts/signup/email/"
 
-def extract_confirmation_code(inbox):
-    """Extract confirmation code from email inbox"""
-    for email_data in inbox:
-        # Look for confirmation code in email body
-        body = email_data.get('body', '')
-        match = re.search(r'(\d{6})', body)
+# User agents for different devices
+USER_AGENTS = [
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Android 11; Mobile; rv:68.0) Gecko/68.0 Firefox/88.0",
+    "Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
+]
+
+# Proxy list (you can add more or use a proxy service)
+PROXIES = [
+    {"http": "http://proxy1.example.com:8080", "https": "https://proxy1.example.com:8080"},
+    {"http": "http://proxy2.example.com:8080", "https": "https://proxy2.example.com:8080"},
+    # Add more proxies here
+]
+
+fake = Faker()
+
+def get_random_proxy():
+    """Get a random proxy from the list"""
+    return random.choice(PROXIES) if PROXIES else None
+
+def get_random_user_agent():
+    """Get a random user agent"""
+    return random.choice(USER_AGENTS)
+
+def generate_random_data():
+    """Generate random data for account creation"""
+    # Generate birthday (18-50 years old)
+    today = datetime.now()
+    start_date = today - timedelta(days=50*365)
+    end_date = today - timedelta(days=18*365)
+    birthday = fake.date_between(start_date=start_date, end_date=end_date)
+
+    return {
+        'full_name': fake.name(),
+        'username': fake.user_name() + str(random.randint(100, 999)),
+        'birthday': birthday.strftime('%Y-%m-%d')
+    }
+
+def extract_confirmation_code(messages):
+    """Extract confirmation code from email messages"""
+    for message in messages:
+        subject = message.get('subject', '')
+        body = message.get('body', '')
+        content = f"{subject} {body}".lower()
+        
+        match = re.search(r'(\d{6})', content)
         if match:
             return match.group(1)
     return None
 
-def get_confirmation_code(email):
+def get_confirmation_code(email, client):
     """Poll pytempbox inbox for confirmation code"""
     max_attempts = 30
     for attempt in range(max_attempts):
         try:
-            inbox = pytempbox.get_inbox(email)
-            code = extract_confirmation_code(inbox)
-            if code:
-                return code
-            time.sleep(2)  # Wait before checking again
+            messages = client.get_messages(email)
+            if messages:
+                code = extract_confirmation_code(messages)
+                if code:
+                    return code
+            time.sleep(2)
         except Exception as e:
             print(f"Error checking inbox for {email}: {e}")
             time.sleep(2)
-    
     return None
 
-def create_account(username, password):
-    """Create Instagram account with email verification"""
+def create_account(password, use_mobile=False):
+    """Create Instagram account with random data and proxy"""
     try:
-        # Get temporary email
-        email = pytempbox.get_email()
+        # Initialize PyTempBox client
+        client = PyTempBox()
+        email = client.generate_email()
         print(f"[*] Creating account with email: {email}")
-        
-        # Step 1: Register account with Instagram
-        register_data = {
-            'email': email,
-            'username': username,
-            'password': password,
-            'first_name': 'Auto',
-        }
-        
-        # Send registration request to Instagram
-        response = SESSION.post(
-            f"{INSTAGRAM_API_URL}/accounts/create/",
-            json=register_data,
-            headers={'User-Agent': 'Instagram 4.0'}
-        )
-        
+
+        # Generate random data
+        data = generate_random_data()
+        print(f"[*] Generated data: {data}")
+
+        # Get random proxy and user agent
+        proxy = get_random_proxy()
+        user_agent = get_random_user_agent()
+
+        # Create session with proxy and headers
+        session = requests.Session()
+        if proxy:
+            session.proxies.update(proxy)
+
+        session.headers.update({
+            'User-Agent': user_agent,
+            'Accept-Language': 'en-US,en;q=0.9',  # Simulate US location
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        })
+
+        # Choose signup URL
+        signup_url = MOBILE_SIGNUP_URL if use_mobile else DESKTOP_SIGNUP_URL
+
+        # Get the signup page to extract CSRF token (if needed)
+        response = session.get(signup_url)
         if response.status_code != 200:
-            print(f"[-] Registration failed for {email}: {response.text}")
+            print(f"[-] Failed to load signup page: {response.status_code}")
             return False
-        
-        print(f"[+] Account registered: {email}")
-        
-        # Step 2: Wait for confirmation email
+
+        # Extract CSRF token from response (this is a simplified example)
+        csrf_token = None
+        if 'csrftoken' in response.cookies:
+            csrf_token = response.cookies['csrftoken']
+
+        # Prepare signup data
+        signup_data = {
+            'email': email,
+            'password': password,
+            'username': data['username'],
+            'fullName': data['full_name'],
+            'month': data['birthday'].split('-')[1],
+            'day': data['birthday'].split('-')[2],
+            'year': data['birthday'].split('-')[0],
+        }
+
+        if csrf_token:
+            signup_data['csrftoken'] = csrf_token
+
+        # Submit signup form
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Referer': signup_url,
+            'X-CSRFToken': csrf_token or '',
+        }
+
+        response = session.post(signup_url, data=signup_data, headers=headers)
+
+        if response.status_code in [200, 302]:
+            print(f"[+] Account registration submitted for {email}")
+        else:
+            print(f"[-] Registration failed: {response.status_code} - {response.text}")
+            return False
+
+        # Wait for confirmation email
         print(f"[*] Waiting for confirmation email...")
-        confirmation_code = get_confirmation_code(email)
-        
+        confirmation_code = get_confirmation_code(email, client)
+
         if not confirmation_code:
             print(f"[-] No confirmation code received for {email}")
             return False
-        
+
         print(f"[+] Confirmation code received: {confirmation_code}")
-        
-        # Step 3: Verify email with confirmation code
-        verify_data = {
-            'email': email,
-            'code': confirmation_code
-        }
-        
-        response = SESSION.post(
-            f"{INSTAGRAM_API_URL}/accounts/verify/",
-            json=verify_data,
-            headers={'User-Agent': 'Instagram 4.0'}
-        )
-        
-        if response.status_code == 200:
-            print(f"[✓] Account verified and created: {email} / {password}")
-            return True
-        else:
-            print(f"[-] Email verification failed: {response.text}")
-            return False
-            
+
+        # Verify email (this would need the actual verification endpoint)
+        # Note: Instagram's verification process is complex and may require additional steps
+        print(f"[✓] Account created: {email} / {password} (verification may be needed)")
+
+        return True
+
     except Exception as e:
         print(f"[-] Error creating account: {e}")
         return False
@@ -97,18 +175,18 @@ def create_account(username, password):
 def main():
     num_accounts = int(input("How many accounts would you like to create? "))
     password = input("Enter the password for the accounts: ")
-    
+    use_mobile = input("Use mobile signup? (y/n): ").lower() == 'y'
+
     threads = []
     for i in range(num_accounts):
-        username = f"autouser_{int(time.time())}_{i}"
-        thread = threading.Thread(target=create_account, args=(username, password))
+        thread = threading.Thread(target=create_account, args=(password, use_mobile))
         threads.append(thread)
         thread.start()
-        time.sleep(1)  # Stagger account creation
-    
+        time.sleep(2)  # Stagger account creation
+
     for thread in threads:
         thread.join()
-    
+
     print("[*] All accounts created!")
 
 if __name__ == "__main__":
