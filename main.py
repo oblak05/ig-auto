@@ -37,8 +37,10 @@ def fetch_free_proxies():
         if response.status_code == 200:
             proxy_list = response.text.strip().split('\n')
             for proxy in proxy_list[:10]:  # Limit to 10 working proxies
+                proxy = proxy.strip()  # Remove \r and whitespace
                 if ':' in proxy and len(proxy.split(':')) == 2:
                     ip, port = proxy.split(':')
+                    port = port.strip()  # Remove any remaining whitespace
                     if ip and port.isdigit():
                         PROXIES.append({
                             "http": f"http://{ip}:{port}",
