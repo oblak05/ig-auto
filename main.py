@@ -19,18 +19,73 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1"
 ]
 
-# Proxy list (you can add more or use a proxy service)
-PROXIES = [
-    {"http": "http://proxy1.example.com:8080", "https": "https://proxy1.example.com:8080"},
-    {"http": "http://proxy2.example.com:8080", "https": "https://proxy2.example.com:8080"},
-    # Add more proxies here
-]
+# Proxy list (will be populated with fetched proxies)
+PROXIES = []
 
 fake = Faker()
 
+def fetch_free_proxies():
+    """Fetch free proxies from public APIs"""
+    global PROXIES
+    if PROXIES and PROXIES[0] is not None:  # Already fetched and not empty
+        return PROXIES
+    
+    print("[*] Fetching free proxies...")
+    try:
+        # Try ProxyScrape API first (most reliable)
+        response = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", timeout=15)
+        if response.status_code == 200:
+            proxy_list = response.text.strip().split('\n')
+            for proxy in proxy_list[:10]:  # Limit to 10 working proxies
+                if ':' in proxy and len(proxy.split(':')) == 2:
+                    ip, port = proxy.split(':')
+                    if ip and port.isdigit():
+                        PROXIES.append({
+                            "http": f"http://{ip}:{port}",
+                            "https": f"http://{ip}:{port}"
+                        })
+        
+        # If no proxies from API, try scraping free-proxy-list.net
+        if not PROXIES:
+            response = requests.get("https://free-proxy-list.net/", timeout=15)
+            if response.status_code == 200:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(response.text, 'html.parser')
+                table = soup.find('table', {'id': 'proxylisttable'})
+                if table:
+                    rows = table.find_all('tr')[1:11]  # Skip header, limit to 10
+                    for row in rows:
+                        cols = row.find_all('td')
+                        if len(cols) >= 7:
+                            ip = cols[0].text.strip()
+                            port = cols[1].text.strip()
+                            https = cols[6].text.strip().lower() == 'yes'
+                            if ip and port.isdigit():
+                                PROXIES.append({
+                                    "http": f"http://{ip}:{port}",
+                                    "https": f"https://{ip}:{port}" if https else f"http://{ip}:{port}"
+                                })
+        
+        if PROXIES:
+            print(f"[+] Successfully fetched {len(PROXIES)} proxies")
+        else:
+            print("[-] No proxies fetched, using direct connection")
+            PROXIES = [None]  # Fallback to no proxy
+            
+    except Exception as e:
+        print(f"[-] Error fetching proxies: {e}")
+        PROXIES = [None]  # Fallback to no proxy
+    
+    return PROXIES
+
 def get_random_proxy():
     """Get a random proxy from the list"""
-    return random.choice(PROXIES) if PROXIES else None
+    if not PROXIES:
+        fetch_free_proxies()
+    
+    # Filter out None values and get a random proxy
+    available_proxies = [p for p in PROXIES if p is not None]
+    return random.choice(available_proxies) if available_proxies else None
 
 def get_random_user_agent():
     """Get a random user agent"""
@@ -98,6 +153,9 @@ def create_account(password, use_mobile=False):
         session = requests.Session()
         if proxy:
             session.proxies.update(proxy)
+            print(f"[*] Using proxy: {proxy['http']}")
+        else:
+            print("[*] Using direct connection (no proxy)")
 
         session.headers.update({
             'User-Agent': user_agent,
@@ -173,6 +231,9 @@ def create_account(password, use_mobile=False):
         return False
 
 def main():
+    print("[*] Fetching proxies...")
+    fetch_free_proxies()
+    
     num_accounts = int(input("How many accounts would you like to create? "))
     password = input("Enter the password for the accounts: ")
     use_mobile = input("Use mobile signup? (y/n): ").lower() == 'y'
