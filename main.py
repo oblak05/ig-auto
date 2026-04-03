@@ -47,24 +47,26 @@ def fetch_free_proxies():
         
         # If no proxies from API, try scraping free-proxy-list.net
         if not PROXIES:
-            response = requests.get("https://free-proxy-list.net/", timeout=15)
-            if response.status_code == 200:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(response.text, 'html.parser')
-                table = soup.find('table', {'id': 'proxylisttable'})
-                if table:
-                    rows = table.find_all('tr')[1:11]  # Skip header, limit to 10
-                    for row in rows:
-                        cols = row.find_all('td')
-                        if len(cols) >= 7:
-                            ip = cols[0].text.strip()
-                            port = cols[1].text.strip()
-                            https = cols[6].text.strip().lower() == 'yes'
-                            if ip and port.isdigit():
-                                PROXIES.append({
-                                    "http": f"http://{ip}:{port}",
-                                    "https": f"https://{ip}:{port}" if https else f"http://{ip}:{port}"
-                                })
+            try:
+                response = requests.get("https://free-proxy-list.net/", timeout=15)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    # Try different table selectors
+                    table = soup.find('table', {'class': 'table'}) or soup.find('table')
+                    if table:
+                        rows = table.find_all('tr')[1:11]  # Skip header, limit to 10
+                        for row in rows:
+                            cols = row.find_all('td')
+                            if len(cols) >= 2:
+                                ip = cols[0].text.strip()
+                                port = cols[1].text.strip()
+                                if ip and port.isdigit():
+                                    PROXIES.append({
+                                        "http": f"http://{ip}:{port}",
+                                        "https": f"http://{ip}:{port}"
+                                    })
+            except:
+                pass  # Ignore scraping errors
         
         if PROXIES:
             print(f"[+] Successfully fetched {len(PROXIES)} proxies")
