@@ -32,8 +32,8 @@ def fetch_free_proxies():
     
     print("[*] Fetching free proxies...")
     try:
-        # Try ProxyScrape API first (most reliable)
-        response = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", timeout=15)
+        # Try HTTPS proxies first (better for HTTPS requests)
+        response = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=https&timeout=10000&country=all&ssl=all&anonymity=all", timeout=15)
         if response.status_code == 200:
             proxy_list = response.text.strip().split('\n')
             for proxy in proxy_list[:10]:  # Limit to 10 working proxies
@@ -44,8 +44,24 @@ def fetch_free_proxies():
                     if ip and port.isdigit():
                         PROXIES.append({
                             "http": f"http://{ip}:{port}",
-                            "https": f"http://{ip}:{port}"
+                            "https": f"https://{ip}:{port}"
                         })
+        
+        # If no HTTPS proxies, try HTTP proxies
+        if not PROXIES:
+            response = requests.get("https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all", timeout=15)
+            if response.status_code == 200:
+                proxy_list = response.text.strip().split('\n')
+                for proxy in proxy_list[:10]:  # Limit to 10 working proxies
+                    proxy = proxy.strip()  # Remove \r and whitespace
+                    if ':' in proxy and len(proxy.split(':')) == 2:
+                        ip, port = proxy.split(':')
+                        port = port.strip()  # Remove any remaining whitespace
+                        if ip and port.isdigit():
+                            PROXIES.append({
+                                "http": f"http://{ip}:{port}",
+                                "https": f"http://{ip}:{port}"
+                            })
         
         # If no proxies from API, try scraping free-proxy-list.net
         if not PROXIES:
@@ -82,14 +98,36 @@ def fetch_free_proxies():
     
     return PROXIES
 
+def test_proxy(proxy):
+    """Test if a proxy is working by making a simple request"""
+    try:
+        test_url = "http://httpbin.org/ip"
+        response = requests.get(test_url, proxies=proxy, timeout=5)
+        if response.status_code == 200:
+            return True
+    except:
+        pass
+    return False
+
 def get_random_proxy():
-    """Get a random proxy from the list"""
+    """Get a random proxy from the list and test it"""
     if not PROXIES:
         fetch_free_proxies()
     
-    # Filter out None values and get a random proxy
+    # Filter out None values and test proxies
     available_proxies = [p for p in PROXIES if p is not None]
-    return random.choice(available_proxies) if available_proxies else None
+    
+    if not available_proxies:
+        return None
+    
+    # Try up to 3 random proxies to find a working one
+    tested_proxies = random.sample(available_proxies, min(3, len(available_proxies)))
+    for proxy in tested_proxies:
+        if test_proxy(proxy):
+            return proxy
+    
+    # If no tested proxies work, return the first one anyway (better than no proxy)
+    return available_proxies[0] if available_proxies else None
 
 def get_random_user_agent():
     """Get a random user agent"""
@@ -157,7 +195,7 @@ def create_account(password, use_mobile=False):
         session = requests.Session()
         if proxy:
             session.proxies.update(proxy)
-            print(f"[*] Using proxy: {proxy['http']}")
+            print(f"[*] Using tested proxy: {proxy['https']}")
         else:
             print("[*] Using direct connection (no proxy)")
 
